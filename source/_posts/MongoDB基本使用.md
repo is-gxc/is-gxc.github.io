@@ -3,7 +3,7 @@
 title: MongoDB基本使用
 date: 2024-06-17 14:29:12
 categories: MongoDB
-tags: MongoDB
+tags: [MongoDB,NoSQL,数据库]
 ---
 
 # 1. MongoDB介绍
