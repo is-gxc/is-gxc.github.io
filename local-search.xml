@@ -4,6 +4,33 @@
   
   
   <entry>
+    <title>SQL查询过程</title>
+    <link href="/2024/06/23/SQL%E6%9F%A5%E8%AF%A2%E8%BF%87%E7%A8%8B/"/>
+    <url>/2024/06/23/SQL%E6%9F%A5%E8%AF%A2%E8%BF%87%E7%A8%8B/</url>
+    
+    <content type="html"><![CDATA[<h1 id="MySQL基本架构"><a href="#MySQL基本架构" class="headerlink" title="MySQL基本架构"></a>MySQL基本架构</h1><p><img src="https://gxc-hexo-blog.oss-cn-beijing.aliyuncs.com/blog/MySQL%E5%9F%BA%E6%9C%AC%E6%9E%B6%E6%9E%84.png"></p><p>从上图看，MySQL分为两部分：Server层 和 存储引擎 </p><p><strong>Server层</strong>：负责建立连接，分析和执行SQL。涵盖MySQL的大多数核心服务功能，主要包括连接器，查询缓存、解析器、预处理器、优化器、执行器等，以及所有的内置函数（如日期、时间、数学和加密函数等）</p><p><strong>存储引擎层</strong>：负责数据的存储和提取。支持 InnoDB、MyISAM、Memory 等多个存储引擎。现在最常用的存储引擎是 InnoDB，它从 MySQL 5.5.5 版本开始成为了默认存储引擎。</p><h1 id="连接器"><a href="#连接器" class="headerlink" title="连接器"></a>连接器</h1><p>执行SQL语句首先得连接到数据库上，这时候就会遇到连机器。连接器负责跟客户端建立连接、获取权限、维持和管理链接。链接命令如下：</p><figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs shell">mysql -h$ip -P$port -u$user -p<br></code></pre></td></tr></table></figure><p>为了密码的安全，不在如上命令后写密码，而是直接执行上述命令在后续的对话框中输入密码。</p><p>连接的过程需要先经过 TCP 三次握手，因为 MySQL 是基于 TCP 协议进行传输的，如果 MySQL 服务并没有启动，则会报一个 “Can’t not connect to MySQL through socket ….”</p><p>如果MySQL服务正常，完成TCP连接之后，连接器就要开始验证用户名和密码</p><ul><li>如果用户名或者密码不对，则会报 “Access denied for user”</li><li>如果用户名密码认证通过，连接器会到权限表里面查出你拥有的权限。之后，这个连接里面的权限判断逻辑，都将依赖于此时读到的权限</li></ul><p>因为在成功建立连接后，连接器已经校验了权限，所以后续管理员账号哪怕对这个权限做了修改，也不会影响已经存在的连接的权限，只有新建的连接才会使用新的权限。</p><p>如何查看MySQL的连接呢？</p><p>连接完成后，如果你没有后续的动作，这个连接就处于空闲状态，你可以在 <code>show processlist</code> 命令中看到它。其中的 Command 列显示为“Sleep”的这一行，就表示现在系统里面有一个空闲连接。</p><p><img src="https://gxc-hexo-blog.oss-cn-beijing.aliyuncs.com/blog/%E6%95%B0%E6%8D%AE%E5%BA%93%E8%BF%9E%E6%8E%A5.png"></p><p>共有两个用户名为 root 的用户连接了 MySQL 服务，其中 id 为 6 的用户的 Command 列的状态为 <code>Sleep</code> ，这意味着该用户连接完 MySQL 服务就没有再执行过任何命令，也就是说这是一个空闲的连接，并且空闲的时长是 736 秒（ Time 列）。</p><p>客户端如果太长时间没动静，连接器就会自动将它断开。这个时间是由参数 wait_timeout 控制的，默认值是 8 小时。(<code>mysql&gt; show variables like &#39;wait_timeout&#39;;</code> 可以查看此配置)</p><p>也可以手动断开空闲的连接，使用 <code>kill connection + id</code> </p><p>如果在连接被断开之后，客户端不会马上感知，当再次发送请求的时，就会收到一个错误提醒： Lost connection to MySQL server during query。这时候如果你要继续，就需要重连，然后再执行请求了。</p><p>建立连接的过程通常是比较复杂的，所以在使用中要尽量减少建立连接的动作，也就是尽量使用长连接。（使用长连接，通过连接池维护一些长连接）</p><p>但是MySQL的连接数有限制，支持的最大连接数由 max_connections 参数控制，如果超过这个限制就会拒绝接下来的连接请求，并报错提示：”Too many connections”，而且使用长连接后可能会占用内存增多，因为 MySQL 在执行查询过程中临时使用内存管理连接对象，这些连接对象资源只有在连接断开时才会释放。如果长连接累计很多，将导致 MySQL 服务占用内存太大，有可能会被系统强制杀掉，这样会发生 MySQL 服务异常重启的现象。</p><p>那如何解决长连接占用内存问题呢？</p><ol><li>定期断开长连接。使用一段时间，或者程序里面判断执行过一个占用内存的大查询后，断开连接，之后要查询再重连。</li><li>如果用的是 MySQL 5.7 或更新版本，可以在每次执行一个比较大的操作后，通过执行 mysql_reset_connection 来重新初始化连接资源。这个过程不需要重连和重新做权限验证，但是会将连接恢复到刚刚创建完时的状态。注意这是接口函数不是命令，那么当客户端执行了一个很大的操作后，在代码里调用 mysql_reset_connection 函数来重置连接，达到释放内存的效果。</li></ol><p>小结：</p><ul><li>与客户端进行 TCP 三次握手建立连接；</li><li>校验客户端的用户名和密码，如果用户名或密码不对，则会报错；</li><li>如果用户名和密码都对了，会读取该用户的权限，然后后面的权限逻辑判断都基于此时读取到的权限；</li></ul><h1 id="查询缓存"><a href="#查询缓存" class="headerlink" title="查询缓存"></a>查询缓存</h1><p>连接建立完成后，执行逻辑就会来到第二步：查询缓存。</p><p>MySQL 拿到一个查询请求后，会先到查询缓存看看，之前是不是执行过这条语句。之前执行过的语句及其结果可能会以 key-value 对的形式，被直接缓存在内存中。key 是查询的语句，value 是查询的结果。如果你的查询能够直接在这个缓存中找到 key，那么这个 value 就会被直接返回给客户端。如果查询的语句没有命中查询缓存中，那么就要往下继续执行，等执行完后，查询的结果就会被存入查询缓存中。</p><p><strong>但是查询缓存往往弊大于利</strong></p><p><strong>查询缓存的失效非常频繁，只要有对一个表的更新，这个表上所有的查询缓存都会被清空。</strong>对于更新比较频繁的表，查询缓存的命中率很低的，如果刚缓存了一个查询结果很大的数据，还没被使用的时候，刚好这个表有更新操作，查询缓冲就被清空了。</p><p>查询缓存受 <code>query_cache_type</code>参数控制，将其设置成 “DEMAND”，SQL就默认不使用查询缓存，对于要使用查询缓存的，可以用 SQL_CACHE 显示指定，例如：</p><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs SQL"><span class="hljs-keyword">select</span> SQL_CACHE <span class="hljs-operator">*</span> <span class="hljs-keyword">from</span> T <span class="hljs-keyword">where</span> ID<span class="hljs-operator">=</span><span class="hljs-number">1</span>；<br></code></pre></td></tr></table></figure><p>在 MySQL 8.0版本之后，查询缓存的功能被移除了。注意：此处移除的是server层的查询缓存，不是InnoDB存储引擎中的 buffer pool。</p><h1 id="分析器"><a href="#分析器" class="headerlink" title="分析器"></a>分析器</h1><p>没有命中查询缓存的查询SQL，就要开始真正执行了。所以接下来要对SQL进行分析</p><p>分析器会做两种分析：<strong>词法分析</strong>、<strong>语法分析</strong></p><p>词法分析：MySQL根据输入的字符串识别出关键字来，比如根据输入的 “select” 识别出这是一个查询语句。</p><p>语法分析：语法分析会根据语法规则，判断输入的这个SQL是否符合MySQL的语法，如果语句有错误，就会收到”You have an error in your SQL syntax”的错误提醒，</p><h1 id="执行SQL"><a href="#执行SQL" class="headerlink" title="执行SQL"></a>执行SQL</h1><p>经过解析器后，就要进入执行SQL查询语句的流程了，查询分三个阶段：预处理阶段、优化阶段、执行阶段</p><h2 id="预处理器"><a href="#预处理器" class="headerlink" title="预处理器"></a>预处理器</h2><ul><li>检查SQL查询语句中的表或者字段是否存在</li><li>将 <code>select *</code> 中的<code>*</code>符号，扩展为表中所有的列</li></ul><h2 id="优化器"><a href="#优化器" class="headerlink" title="优化器"></a>优化器</h2><p>在预处理过后，还需要优化器进行处理</p><p><strong>优化器主要负责将 SQL 查询语句的执行方案确定下来</strong>，比如在表里面有多个索引的时候，决定使用哪个索引，或者在一个语句有多表关联（join）的时候，决定各个表的连接顺序。</p><p>如何知道优化器选择了哪个索引？</p><p>可以在查询语句最前面加个 <code>explain</code> 命令，这样就会输出这条 SQL 语句的执行计划，然后执行计划中的 key 就表示执行过程中使用了哪个索引，当 key 为 <code>PRIMARY</code> 就是使用了主键索引。</p><blockquote><p>type显示的是访问类型，访问类型表示我是以何种方式去访问我们的数据，最容易想的是全表扫描，直接暴力的遍历一张表去寻找需要的数据，效率非常低下，访问的类型有很多，效率从最好到最坏依次是：</p><p>所有的连接类型中，上面的最好，越往下越差。在常用的链接类型中：system &gt; const &gt; eq_ref &gt; ref &gt; fulltext &gt; ref_or_null &gt; index_merge &gt; unique_subquery &gt; index_subquery &gt; range &gt; index &gt; ALL</p><p>以上访问类型除了 all，都能用到索引,一般情况下，得保证查询至少达到range级别，最好能达到ref</p><p>–all:全表扫描，一般情况下出现这样的sql语句而且数据量比较大的话那么就需要进行优化。<br>explain select * from emp;</p><p>–index：全索引扫描这个比all的效率要好，主要有两种情况，一种是当前的查询时覆盖索引，即我们需要的数据在索引中就可以索取，或者是使用了索引进行排序，这样就避免数据的重排序<br>explain  select empno from emp;</p><p>–range：表示利用索引查询的时候限制了范围，在指定范围内进行查询，这样避免了index的全索引扫描，适用的操作符： &#x3D;, &lt;&gt;, &gt;, &gt;&#x3D;, &lt;, &lt;&#x3D;, IS NULL, BETWEEN, LIKE, or IN()<br>explain select * from emp where empno between 7000 and 7500;</p><p>–index_subquery：利用索引来关联子查询，不再扫描全表<br>explain select * from emp where emp.job in (select job from t_job);</p><p>–unique_subquery:该连接类型类似与index_subquery,使用的是唯一索引<br> explain select * from emp e where e.deptno in (select distinct deptno from dept);</p><p>–index_merge：在查询过程中需要多个索引组合使用，没有模拟出来</p><p>–ref_or_null：对于某个字段即需要关联条件，也需要null值的情况下，查询优化器会选择这种访问方式<br>explain select * from emp e where  e.mgr is null or e.mgr&#x3D;7369;</p><p>–ref：使用了非唯一性索引进行数据的查找，查询用到了非唯一性索引，或者关联操作只使用了索引的最左前缀。<br> create index idx_3 on emp(deptno);<br> explain select * from emp e,dept d where e.deptno &#x3D;d.deptno;</p><p>–eq_ref ：通常出现在多表的 join 查询，被驱动表通过唯一性索引（UNIQUE 或 PRIMARY KEY）进行访问，此时被驱动表的访问方式就是 eq_ref。eq_ref 是除 const 之外最好的访问类型。使用唯一性索引进行数据查找<br>explain select * from emp,emp2 where emp.empno &#x3D; emp2.empno;</p><p>–const：主键索引或者唯一索引,这个表至多有一个匹配行；<br>explain select * from emp where empno &#x3D; 7369;</p><p>–system：system 是 const 的一种特例，只有一行满足条件，对于 MyISAM、Memory 的表，只查询到一条记录，也是 system。比如系统库的这张表（8.0 的版本中系统表全部变成 InnoDB 存储引擎了）：<br>表只有一行记录（等于系统表），这是const类型的特例，平时不会出现；<br>EXPLAIN SELECT * FROM mysql.proxies_priv;</p></blockquote><h2 id="执行器"><a href="#执行器" class="headerlink" title="执行器"></a>执行器</h2><p>MySQL 通过分析器知道了你要做什么，通过优化器知道了该怎么做，于是就进入了执行器阶段，开始执行语句。</p><p>开始执行的时候，要先判断一下你对这个表 T 有没有执行查询的权限，如果没有，就会返回没有权限的错误(在工程实现上，如果命中查询缓存，会在查询缓存返回结果的时候，做权限验证。查询也会在优化器之前调用 precheck 验证权限)。</p><p>执行器又三种执行方式：</p><ul><li>主键索引查询</li><li>全表扫描</li><li>索引下推</li></ul><h3 id="主键索引查询"><a href="#主键索引查询" class="headerlink" title="主键索引查询"></a>主键索引查询</h3><p>比如有如下查询语句</p><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs sql"><span class="hljs-keyword">select</span> <span class="hljs-operator">*</span> <span class="hljs-keyword">from</span> T <span class="hljs-keyword">where</span> ID<span class="hljs-operator">=</span><span class="hljs-number">10</span>;<br></code></pre></td></tr></table></figure><p>现在ID是主键，那么查询条件用到了主键索引，而且是等值查询，那么查询的流程如下：</p><ul><li><p>执行器第一次查询，会调用 read_first_record 函数指针指向的函数，因为优化器选择的访问类型为 const，这个函数指针被指向为 InnoDB 引擎索引查询的接口，把条件 <code>id = 10</code> 交给存储引擎，<strong>让存储引擎定位符合条件的第一条记录</strong>。</p></li><li><p>存储引擎通过主键索引的 B+ 树结构定位到 id &#x3D; 10的第一条记录，记录是不存在的，就会向执行器上报记录找不到的错误，然后查询结束。如果记录是存在的，就会将记录返回给执行器</p></li><li><p>执行器从存储引擎读到记录后，接着判断记录是否符合查询条件，如果符合则发送给客户端，如果不符合则跳过该记录。</p></li><li><p>执行器查询的过程是一个 while 循环，所以还会再查一次，但是这次因为不是第一次查询了，所以会调用 read_record 函数指针指向的函数，因为优化器选择的访问类型为 const，这个函数指针被指向为一个永远返回 - 1 的函数，所以当调用该函数的时候，执行器就退出循环，也就是结束查询了。</p></li></ul><h3 id="全表扫描"><a href="#全表扫描" class="headerlink" title="全表扫描"></a>全表扫描</h3><p>比如有如下查询语句</p><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs sql"><span class="hljs-keyword">select</span> <span class="hljs-operator">*</span> <span class="hljs-keyword">from</span> T <span class="hljs-keyword">where</span> name<span class="hljs-operator">=</span><span class="hljs-string">&#x27;xiaoming&#x27;</span>;<br></code></pre></td></tr></table></figure><p>这条查询语句的查询条件没有用到索引，所以优化器决定选用访问类型为 ALL 进行查询，也就是全表扫描的方式查询，具体执行流程如下：</p><ul><li>执行器第一次查询，会调用 read_first_record 函数指针指向的函数，因为优化器选择的访问类型为 all，这个函数指针被指向为 InnoDB 引擎全扫描的接口，<strong>让存储引擎读取表中的第一条记录</strong></li><li>执行器会判断读到的这条记录的 name 是不是 xiaoming，如果不是则跳过，如果是则将记录发给客户的（Server 层每从存储引擎读到一条记录就会发送给客户端，之所以客户端显示的时候是直接显示所有记录的，是因为客户端是等查询语句查询完成后，才会显示出所有的记录）。</li><li>执行器查询的过程是一个 while 循环，所以还会再查一次，会调用 read_record 函数指针指向的函数，因为优化器选择的访问类型为 all，read_record 函数指针指向的还是 InnoDB 引擎全扫描的接口，所以接着向存储引擎层要求继续读刚才那条记录的下一条记录，存储引擎把下一条记录取出后就将其返回给执行器（Server层），执行器继续判断条件，不符合查询条件即跳过该记录，否则发送到客户端。</li><li>一直重复上述过程，直到存储引擎把表中的所有记录读完，然后向执行器（Server层） 返回了读取完毕的信息</li><li>执行器收到存储引擎报告的查询完毕的信息，退出循环，停止查询</li></ul><h3 id="索引下推"><a href="#索引下推" class="headerlink" title="索引下推"></a>索引下推</h3><p>索引下推能够减少<strong>二级索引</strong>在查询时的回表操作，提高查询的效率，因为它将 Server 层部分负责的事情，交给存储引擎层去处理了。</p><p>假如现在有表如下：</p><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><code class="hljs sql"><span class="hljs-keyword">create</span> <span class="hljs-keyword">table</span> T (<br>id <span class="hljs-type">bigint</span> <span class="hljs-keyword">not</span> <span class="hljs-keyword">null</span> auto_increment,<br>  age <span class="hljs-type">int</span> <span class="hljs-keyword">not</span> <span class="hljs-keyword">null</span> <span class="hljs-keyword">default</span> <span class="hljs-number">0</span>,<br>  name <span class="hljs-type">varchar</span>(<span class="hljs-number">32</span>) <span class="hljs-keyword">not</span> <span class="hljs-keyword">null</span> <span class="hljs-keyword">default</span> <span class="hljs-string">&#x27;&#x27;</span>,<br>  <span class="hljs-keyword">primary</span> (id),<br>  key idx_person(age, age)<br>);<br></code></pre></td></tr></table></figure><p>给name和age建立了联合索引，现有查询语句如下：</p><figure class="highlight sql"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs sql"><span class="hljs-keyword">select</span> <span class="hljs-operator">*</span> <span class="hljs-keyword">from</span> T <span class="hljs-keyword">where</span> age <span class="hljs-operator">&gt;</span> <span class="hljs-number">18</span> <span class="hljs-keyword">and</span> name<span class="hljs-operator">=</span><span class="hljs-string">&#x27;xiaoming&#x27;</span>;<br></code></pre></td></tr></table></figure><p>联合索引当遇到范围查询 (&gt;、&lt;) 就会停止匹配，也就是 <strong>age 字段能用到联合索引，但是name 字段则无法利用到索引</strong>。</p><p>那么，不使用索引下推（MySQL 5.6 之前的版本）时，执行器与存储引擎的执行流程是这样的：</p><ul><li>Server 层首先调用存储引擎的接口定位到满足查询条件的第一条二级索引记录，也就是定位到 age &gt; 18 的第一条记录</li><li>存储引擎根据二级索引的 B+ 树快速定位到这条记录后，获取主键值，然后<strong>进行回表操作</strong>，将完整的记录返回给 Server 层</li><li>Server 层在判断该记录的 name 是否等于 xiaoming，如果成立则将其发送给客户端，否则跳过该记录</li><li>接着，继续向存储引擎索要下一条记录，存储引擎在二级索引定位到记录后，获取主键值，然后回表操作，将完整的记录返回给 Server 层</li><li>如此往复，直到存储引擎把表中的所有记录读完。</li></ul><p>可以看到，没有索引下推的时候，每查询到一条二级索引记录，都要进行回表操作，然后将记录返回给 Server，接着 Server 再判断该记录的 name 是否等于 xiaoming。</p><p>而使用索引下推后，执行过程如下：</p><ul><li>Server 层首先调用存储引擎的接口定位到满足查询条件的第一条二级索引记录，也就是定位到 age &gt; 18 的第一条记录；</li><li>存储引擎定位到二级索引后，<strong>先不执行回表</strong>操作，而是先判断一下该索引中包含的列（name列）的条件（name 是否等于xiaoming）是否成立。如果<strong>条件不成立</strong>，则直接<strong>跳过该二级索引</strong>。如果<strong>成立</strong>，则<strong>执行回表</strong>操作，将完成记录返回给 Server 层。</li><li>Server 层在判断其他的查询条件（本次查询没有其他条件）是否成立，如果成立则将其发送给客户端，否则跳过该记录，然后向存储引擎索要下一条记录。</li><li>如此往复，直到存储引擎把表中的所有记录读完。</li></ul><p>可以看到，使用了索引下推后，虽然 name 列无法使用到联合索引，但是因为它包含在联合索引（age，name）里，所以直接在存储引擎过滤出满足 name &#x3D; xiaoming 的记录后，才去执行回表操作获取整个记录。相比于没有使用索引下推，节省了很多回表操作。</p>]]></content>
+    
+    
+    <categories>
+      
+      <category>MySQL</category>
+      
+    </categories>
+    
+    
+    <tags>
+      
+      <tag>MySQL</tag>
+      
+      <tag>数据库</tag>
+      
+    </tags>
+    
+  </entry>
+  
+  
+  
+  <entry>
     <title>MongoDB集群</title>
     <link href="/2024/06/19/MongoDB%E9%9B%86%E7%BE%A4/"/>
     <url>/2024/06/19/MongoDB%E9%9B%86%E7%BE%A4/</url>
@@ -20,11 +47,11 @@
     
     <tags>
       
+      <tag>数据库</tag>
+      
       <tag>MongoDB</tag>
       
       <tag>NoSQL</tag>
-      
-      <tag>数据库</tag>
       
     </tags>
     
@@ -49,36 +76,11 @@
     
     <tags>
       
+      <tag>数据库</tag>
+      
       <tag>MongoDB</tag>
       
       <tag>NoSQL</tag>
-      
-      <tag>数据库</tag>
-      
-    </tags>
-    
-  </entry>
-  
-  
-  
-  <entry>
-    <title>Hello World</title>
-    <link href="/2024/06/15/hello-world/"/>
-    <url>/2024/06/15/hello-world/</url>
-    
-    <content type="html"><![CDATA[<p>Welcome to <a href="https://hexo.io/">Hexo</a>! This is your very first post. Check <a href="https://hexo.io/docs/">documentation</a> for more info. If you get any problems when using Hexo, you can find the answer in <a href="https://hexo.io/docs/troubleshooting.html">troubleshooting</a> or you can ask me on <a href="https://github.com/hexojs/hexo/issues">GitHub</a>.</p><h2 id="Quick-Start"><a href="#Quick-Start" class="headerlink" title="Quick Start"></a>Quick Start</h2><h3 id="Create-a-new-post"><a href="#Create-a-new-post" class="headerlink" title="Create a new post"></a>Create a new post</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs bash">$ hexo new <span class="hljs-string">&quot;My New Post&quot;</span><br></code></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/writing.html">Writing</a></p><h3 id="Run-server"><a href="#Run-server" class="headerlink" title="Run server"></a>Run server</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs bash">$ hexo server<br></code></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/server.html">Server</a></p><h3 id="Generate-static-files"><a href="#Generate-static-files" class="headerlink" title="Generate static files"></a>Generate static files</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs bash">$ hexo generate<br></code></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/generating.html">Generating</a></p><h3 id="Deploy-to-remote-sites"><a href="#Deploy-to-remote-sites" class="headerlink" title="Deploy to remote sites"></a>Deploy to remote sites</h3><figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><code class="hljs bash">$ hexo deploy<br></code></pre></td></tr></table></figure><p>More info: <a href="https://hexo.io/docs/one-command-deployment.html">Deployment</a></p>]]></content>
-    
-    
-    <categories>
-      
-      <category>test</category>
-      
-    </categories>
-    
-    
-    <tags>
-      
-      <tag>test</tag>
       
     </tags>
     
