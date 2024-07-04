@@ -639,7 +639,7 @@ db.comment.find().limit(3)
 skip方法同样接收一个数字参数作为跳过的记录条数。（前N个不要）， 默认值是0
 
 ```shell
-db.comment.fin().skip(3)
+db.comment.find().skip(3)
 ```
 
 
