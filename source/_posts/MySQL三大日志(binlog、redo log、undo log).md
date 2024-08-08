@@ -26,7 +26,7 @@ buffer pool具有以下特点：
 
 buffer pool的结构如下：
 
-![](https://gxc-hexo-blog.oss-cn-beijing.aliyuncs.com/blog/mysql_buffer_pool.png)
+<img src="https://gxc-hexo-blog.oss-cn-beijing.aliyuncs.com/blog/mysql_buffer_pool.png"  />
 
 1. 索引页（Index Pages）
 
