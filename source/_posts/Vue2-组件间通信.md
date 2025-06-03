@@ -627,3 +627,6 @@ function renderSlot() {
 
 
 
+# Vuex
+
+[Vuex](https://is-gxc.github.io//2025/06/03/Vue2-Vuex/)
